@@ -1,5 +1,5 @@
 #ifndef SCHED_H_
-#define SHCED_H_
+#define SCHED_H_
 
 #include <coroutine>
 #include <deque>
@@ -8,54 +8,16 @@
 #include <thread>
 #include <algorithm>
 #include <optional>
-
-class Task {
-    struct promise_type {
-        Task get_return_object() { return Task(std::coroutine_handle<promise_type>::from_promise(*this)); }
-        std::suspend_always initial_suspend() { return {}; }
-        std::suspend_always final_suspend() noexcept { return {}; }
-        void return_void() {}
-        void unhandled_exception() { std::terminate(); }
-    };
-
-public:
-    std::coroutine_handle<promise_type> handle;
-    using promise_type = promise_type;
-    static int idseq;
-    int id_;
-
-    Task() : id_(idseq++) {}
-    Task(std::coroutine_handle<promise_type> h) : handle(h) {}
-    Task(Task&& other) noexcept : handle(other.handle) {
-        other.handle = nullptr;
-    }
-    ~Task() { 
-        // False if moved
-        if (handle) {
-             handle.destroy(); 
-             std::cout << "[TASK]  " << id_ << " finished." << std::endl;
-        }
-    }
-
-    constexpr Task& operator=(Task&& other) = default;
-
-    bool operator==(std::coroutine_handle<> const& h) {
-        return handle == h;
-    }
-
-    void resume() {
-        if (handle && !handle.done()) handle.resume();
-    }
-};
-
-int Task::idseq = 0;
-
+#include <functional>
+#include <mutex>
+#include "task.h"
 
 class Scheduler {
     std::vector<Task> suspended_vector;
     std::deque<Task> ready_queue;
     std::optional<Task> active_task;
     std::deque<int> int_queue;
+    std::mutex m;
 private:
     static Scheduler *instance;
     Scheduler() { }
@@ -78,16 +40,20 @@ public:
     }
  
     void schedule(Task task) {
+
+        std::unique_lock lock(m);
         ready_queue.push_back(std::move(task));
     }
 
     void schedule_current() {
         if (active_task) {
+            std::unique_lock lock(m);
             ready_queue.push_back(std::move(*active_task));
         }
     }
 
     void schedule_suspended(std::coroutine_handle<> const& h) {
+        std::unique_lock lock(m);
         auto it = std::find(suspended_vector.begin(), suspended_vector.end(), h);
         if (it != suspended_vector.end()) {
             ready_queue.push_back(std::move(*it));
@@ -97,11 +63,14 @@ public:
 
     void run() {
         while (true) {
+            std::unique_lock lock(m);
             if (!ready_queue.empty()) {
                 active_task.emplace(std::move(ready_queue.front()));
                 auto active_task_id = active_task->id_;
                 ready_queue.pop_front();
+                lock.unlock();
                 active_task->resume();
+                lock.lock();
                 std::cout << "[SCHED] Task " << active_task_id << " resumed for single step" << std::endl;
                 if (ready_queue.empty() && suspended_vector.empty()) {
                     std::cout << "[SCHED] No more work. Quitting" << std::endl;
@@ -118,6 +87,9 @@ public:
 
 };
 
+
+Scheduler* Scheduler::instance = nullptr;
+
 struct TimedWait {
 
     using seconds_t = std::chrono::duration<double>;
@@ -131,12 +103,11 @@ struct TimedWait {
         Scheduler::get_instance().suspend_current();
         std::thread t([=, this] () {
             std::this_thread::sleep_for(time_);
-            std::cout << h.address() << " Timer expired " << std::endl;
             Scheduler::get_instance().schedule_suspended(h);
         });
         t.detach();
     }
-    void await_resume() {}
+    int await_resume() { return 42; }
 
 };
 
@@ -149,6 +120,5 @@ struct Yield {
     void await_resume() {}
 };
 
-Scheduler* Scheduler::instance = nullptr;
 
 #endif
