@@ -1,5 +1,6 @@
 {
     "files.associations": {
+        "*.dpf": "yaml",
         "iostream": "cpp",
         "coroutine": "cpp",
         "array": "cpp",
@@ -59,6 +60,30 @@
         "cinttypes": "cpp",
         "typeinfo": "cpp",
         "variant": "cpp",
-        "set": "cpp"
-    }
+        "set": "cpp",
+        "bitset": "cpp",
+        "condition_variable": "cpp",
+        "cstring": "cpp",
+        "mutex": "cpp",
+        "ranges": "cpp",
+        "codecvt": "cpp",
+        "csetjmp": "cpp",
+        "forward_list": "cpp",
+        "list": "cpp",
+        "map": "cpp",
+        "unordered_set": "cpp",
+        "fstream": "cpp",
+        "shared_mutex": "cpp",
+        "cfenv": "cpp",
+        "__nullptr": "cpp",
+        "filesystem": "cpp",
+        "queue": "cpp",
+        "stack": "cpp",
+        "__config": "cpp",
+        "__hash_table": "cpp",
+        "__tree": "cpp",
+        "*.def": "cpp",
+        "*.inc": "cpp"
+    },
+    "sarif-viewer.connectToGithubCodeScanning": "off"
 }

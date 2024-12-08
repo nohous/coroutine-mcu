@@ -2,43 +2,58 @@
 #include <iostream>
 #include <thread>
 
-using namespace adva::corocore;
+using namespace adva;
+namespace cc = corocore;
+
+struct app_scheduler_config {
+    static constexpr size_t couroutine_alloc_granularity = 32;
+    static constexpr size_t timer_count = 32;
+};
 
 
-async_task task1()
+using app_scheduler = cc::scheduler<app_scheduler_config>;
+using yield_awaitable = cc::yield_awaitable<app_scheduler>;
+using async_task = cc::async_task<app_scheduler>;
+
+async_task task1(int a)
 {
-    for (int i = 0; ; i++) {
-        std::cout << "task 1: " << i << std::endl;
-        //std::this_thread::sleep_for(std::chrono::duration<double>(0.15));
-        if (i % 10 == 0) co_await yield<scheduler<>>();
+    int b[128];
+    for (int i = 0; ; i+=a) {
+        std::cout << "task 1: " << b[i % 128] << std::endl;
+
+        std::this_thread::sleep_for(std::chrono::duration<double>(0.15));
+        std::cout << "yield" << std::endl;
+        co_await yield_awaitable();
     }
 }
-async_task task2()
+async_task task2(int a)
 {
-    for (int i = 0; ; i++) {
+    
+    for (int i = 0; ; i+=a) {
         std::cout << "task 2: " << i << std::endl;
-        //std::this_thread::sleep_for(std::chrono::duration<double>(0.15));
-        if (i % 10 == 0) co_await yield<scheduler<>>();
+        std::this_thread::sleep_for(std::chrono::duration<double>(0.1));
+        co_await yield_awaitable();
     }
+   co_return;
 }
+
 
 int main()
 {
-    auto& s = scheduler<>::get_instance();
 
-    /*for (int i = 0; i< 158; i++) {
-        auto h = s.move_task(task1());
-        if (!h) {
-            std::cout << "Out of space " << i << std::endl;
-            break;
-        }
-        auto t = async_task::from_handle(*h).i = 125;
-        
-    }*/
+    auto& s = app_scheduler::get_instance();
 
-   auto h1 = s.move_task(task1());
-   auto h2 = s.move_task(task2());
-   s.run();
+
+    async_task t1{task1(1)};
+    //async_task t2 = task2(-1);
+
+    std::cout << sizeof(async_task) << " " << std::endl;
+
+    std::cout << "t1 " << &t1 << std::endl;
+
+    s.register_task(t1);
+    //s.move_task(std::move(t2));
+    s.run();
 
     return 0;
 }
