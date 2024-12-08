@@ -162,17 +162,23 @@ namespace adva::corocore {
             return handles_.erase(h) > 0;
         }
 
-        bool schedule_suspended(handle_type& h) {
+        bool schedule(handle_type& h, auto&& pred) {
+            if (!handles_.contains(h)) return false;
 
+            auto& p = h.promise();
+            if (!pred(p.state_)) return false;
+            
+            p.state_ = task_state::SCHEDULED;
+            scheduled_.push(h);
+            return true;
         }
-        bool schedule_active(handle_type& h) {
+        bool suspend_active(handle_type& h) {
             if (!handles_.contains(h)) return false;
 
             auto& p = h.promise();
             if (p.state_ != task_state::ACTIVE) return false;
-            
-            p.state_ = task_state::SCHEDULED;
-            scheduled_.push(h);
+
+            p.state_ = task_state::SUSPENDED;
             return true;
         }
 
@@ -225,7 +231,6 @@ namespace adva::corocore {
         { a.await_ready() } -> std::convertible_to<bool>;
         { a.await_suspend(t) };
         { a.await_resume() };
-        { a.scheduler_callable() };
     };
 
     template <typename A, typename S>
@@ -240,7 +245,14 @@ namespace adva::corocore {
         S& s_;
     
     protected:
-        bool schedule_active(handle_type& h) { return s_.schedule_active(h); }
+        bool schedule_active(handle_type& h) { 
+            return s_.schedule(h,[](task_state state) { return state == task_state::ACTIVE; }); 
+        }
+        bool schedule_suspended(handle_type& h) { 
+            return s_.schedule(h,[](task_state state) { return state == task_state::SUSPENDED; }); 
+        }
+        bool suspend_active(handle_type& h) { return s_.suspend_active(h); }
+
     };
 
     template <typename S>
@@ -251,20 +263,30 @@ namespace adva::corocore {
         // Awaitable interface
         bool await_ready() { return false; }
         bool await_suspend(handle_type& h) { 
-            std::cout << "suspend  " << &h << std::endl;
-            if (!base_type::schedule_active(h)) { 
-                std::cout << "E" << std::endl;
-            }
-            return true;
+            return base_type::schedule_active(h);
         }
         void await_resume()  { }
-        void scheduler_callable()  { }
-
     };
-
-    /*template <typename S>
-    struct event_awaitable*/
     // template <typename S> yield_awaitable(S) -> yield_awaitable<S>;
+
+    template <typename S>
+    struct event_awaitable : public scheduler_friend<event_awaitable<S>, S> {
+        using handle_type = S::handle_type;
+        using base_type = scheduler_friend<event_awaitable<S>, S>;
+
+        void trigger() { base_type::schedule_suspended(h_); }
+
+        // Awaitable interface
+        bool await_ready() { return false; }
+        bool await_suspend(handle_type& h) {
+            h_ = h;
+            return base_type::suspend_active(h);
+        }
+        void await_resume()  { }
+
+    private:
+        handle_type h_;
+    };
     #endif
 }
 
