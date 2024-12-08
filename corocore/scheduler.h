@@ -3,13 +3,14 @@
 
 #include <iostream>
 #include <coroutine>
+#include <functional>
 #include <utility>
 #include <tuple>
 #include <chrono>
+#include <etl/utility.h>
 #include <etl/flat_set.h>
 #include <etl/queue.h>
 #include <etl/optional.h>
-#include <etl/priority_queue.h>
 
 namespace adva::corocore {
 
@@ -29,7 +30,6 @@ namespace adva::corocore {
     template <SchedulerConfig C = scheduler_config_default>
     class scheduler;
 
-
     enum class task_priority {
         LOW, MID, HIGH, ISR
     };
@@ -39,174 +39,186 @@ namespace adva::corocore {
         SUSPENDED,
         SCHEDULED,
         ACTIVE,
-        ZOMBIE
+        DONE,
+        ZOMBIE,
     };
 
     template <typename S>
-    struct async_task_promise;
-
-    template <typename S>
-    class async_task : public std::coroutine_handle<async_task_promise<S>> {
+    class async_task {
     public:
+        struct promise_type;
+
         using scheduler_type = S;
-        using promise_type = async_task_promise<scheduler_type>;
-        using handle_type = std::coroutine_handle<promise_type>;
+        using async_task_type = async_task<scheduler_type>;
+        using handle_type = std::coroutine_handle<async_task_type::promise_type>;
+
+        struct promise_type {
+        private:
+            friend scheduler_type;
+
+            task_state state_;
+
+        public:
+
+            promise_type() : state_(task_state::INACTIVE) {}
+            #if 0
+            static async_task get_return_object_on_allocation_failure()
+            {
+                std::cerr << __func__ << '\n';
+                //throw std::bad_alloc(); // or, return Coroutine(nullptr);
+            }
+            #endif
+            void* operator new(std::size_t n) noexcept
+            {
+                void *mem = new char[n];
+                std::cout << __func__ <<  " " << mem << " " << n << std::endl;
+                return mem;
+            }
+            ~promise_type() {
+                scheduler_type::get_instance().erase_task(handle_type::from_promise(*this));
+                std::cout << __func__ << std::endl;
+            }
+
+            // Promise interface
+            async_task_type get_return_object() noexcept { 
+                std::cout << __func__ << " gro " << std::endl;
+                
+                auto h = handle_type::from_promise(*this);
+                scheduler_type::get_instance().insert_task(h);
+                return async_task_type(h); // Prvalue is materialized on caller's stack
+            }
+            std::suspend_always initial_suspend() noexcept { return {}; }
+            std::suspend_always final_suspend() noexcept { return {}; }
+            void return_void() noexcept {}
+            void unhandled_exception() { std::terminate(); }
+
+        };
+
     private:
         friend scheduler_type;
-        friend promise_type;
 
-        task_state state_;
+        handle_type handle_;
+
+    private:
+        explicit async_task(handle_type& h) noexcept : handle_(std::move(h)) { 
+            std::cout <<  __func__ << " " << this << " move handle " << &h << std::endl;
+        }
+
+        promise_type& promise() noexcept { return handle_.promise(); }
 
     public:
-        async_task() : 
-            state_(task_state::INACTIVE) {}
-        async_task(handle_type const& h) : handle_type(std::move(h)) { 
-            std::cout <<  __func__ << " move handle" << std::endl;
-        }
+        async_task() = delete;
+        async_task(const async_task&) = delete;
+        async_task& operator=(const async_task&) = delete;
+
         async_task(async_task&& other) noexcept : 
-            handle_type(std::move(other)),
-            state_(other.state_)
+            handle_(std::exchange(other.handle_, nullptr))
         {
             std::cout <<  __func__ << " move" << std::endl;
         }
-        ~async_task() { }
-
-        async_task& operator=(async_task&& other) {
-            std::cout << __func__ << "=" << std::endl;
-            state_ = other.state_;
+        async_task& operator=(async_task&& other) noexcept {
+            if (this != &other) {
+                if (handle_) handle_.destroy();
+                handle_ = std::exchange(other.handle_, nullptr);
+            }
             return *this;
         }
-        task_state state() const { return state_; }
+
+        ~async_task() noexcept { std::cout << __func__ << std::endl; 
+            if (handle_) handle_.destroy(); }
+        task_state state() const noexcept { return promise()._state; }
 
     };    
-    
-    template <typename S>
-    struct async_task_promise {
-        using scheduler_type = S;
-        using async_task = async_task<scheduler_type>;
 
-        async_task get_return_object() { 
-            //auto task = async_task(std::coroutine_handle<promise>::from_promise(*this)); 
-            return async_task::from_promise(*this); 
-        }
-        std::suspend_always initial_suspend() { return {}; }
-        std::suspend_always final_suspend() noexcept { return {}; }
-        void return_void() {}
-
-        //void return_value(T val) { val = 42; }
-
-            // ensure the use of non-throwing operator-new
-        #if 0
-        static async_task get_return_object_on_allocation_failure()
-        {
-            std::cerr << __func__ << '\n';
-            //throw std::bad_alloc(); // or, return Coroutine(nullptr);
-        }
-        #endif
-    
-        // custom non-throwing overload of new
-        void* operator new(std::size_t n) noexcept
-        {
-            std::cout << __func__ <<  " " << sizeof(async_task) << " " << n << std::endl;
-            return new char[n];
-        }
-
-        void unhandled_exception() { std::terminate(); }
-
-        ~async_task_promise() {
-            std::cout << __func__ << std::endl;
-        }
-    };
-
-
-
-    template <SchedulerConfig C>
+    template <SchedulerConfig C> 
     class scheduler {
     public:
         using config_type = C;
         using scheduler_type = scheduler<config_type>;
         using async_task_type = async_task<scheduler_type>;
+        using handle_type = async_task_type::handle_type;
+ 
         template <typename A, typename S> friend struct scheduler_friend;
+        friend async_task_type;
 
     private:
-        using registered_tasks_set = etl::flat_set<async_task_type*, 16>;
-        using scheduled_queue = etl::queue<async_task_type*, 16>;
-        using time_point = chr::time_point<chr::high_resolution_clock>;
-        using duration_us = chr::duration<chr::microseconds>;
+        using handle_set = etl::flat_set<handle_type, config_type::max_task_count>;
+        using scheduled_queue = etl::queue<handle_type, config_type::max_task_count>;
 
-        using timer = std::tuple<time_point, async_task_type*>;
-        using timer_queue = etl::priority_queue<timer, config_type::timer_count>;
+        handle_set handles_;
+        scheduled_queue scheduled_;
 
-        registered_tasks_set registered_tasks;
-        scheduled_queue scheduled_tasks;
-        timer_queue timers;
-        async_task_type* active_task;
-    
     private:
-        scheduler() : active_task(nullptr) { }
+        scheduler() { }
 
-        void priv_func() { }
-
-        /*bool schedule_suspended(async_task&& t);
-        bool schedule_active(async_task&& t);*/
-
-        bool schedule_suspended(async_task_type& t) {
-            if (t.state_ != task_state::SUSPENDED) return false;
-            t.state_ = task_state::SCHEDULED;
-            scheduled_tasks.push(&t);
-            std::cout << scheduled_tasks.size() << std::endl;
-            return true;
+        bool insert_task(handle_type& h) {
+            if (handles_.contains(h)) return false;
+ 
+            h.promise().state_ = task_state::SUSPENDED;
+            auto [it, result] = handles_.insert(h);
+            return result;
+        }
+        bool erase_task(handle_type const& h) {
+            return handles_.erase(h) > 0;
         }
 
-        bool schedule_active(async_task_type& t) {
-            if (t.state_ != task_state::ACTIVE) return false;
-            t.state_ = task_state::SCHEDULED;
-            scheduled_tasks.push(&t);
+        bool schedule_suspended(handle_type& h) {
 
-            //auto tp = std::chrono::high_resolution_clock::now() + duration_us(1000);
-            //timer_queue.emplace(std::make_tuple<timer_type>(tp, nullptr));
+        }
+        bool schedule_active(handle_type& h) {
+            if (!handles_.contains(h)) return false;
+
+            auto& p = h.promise();
+            if (p.state_ != task_state::ACTIVE) return false;
+            
+            p.state_ = task_state::SCHEDULED;
+            scheduled_.push(h);
             return true;
         }
-
 
     public:
         static scheduler_type& get_instance() { static scheduler_type inst; return inst; }
-        /*bool move_task(async_task&& task);
-        void run();*/
 
-        bool register_task(async_task_type& t) {
-            std::cout << __func__ << " register " << &t << std::endl;
-            registered_tasks.insert(&t);
-            t.state_ = task_state::SUSPENDED;
-            schedule_suspended(t);
-            return true;
+        void schedule_all_suspended() {
+            for (auto& h: handles_) {
+                if (h.promise().state_ != task_state::SUSPENDED) continue;
+                scheduled_.push(h);
+            }
         }
+        void run_once() {
+            // TODO: handle events
 
+            if (scheduled_.empty()) {
+                // TODO: idle task
+                return;
+            }
+
+            auto& h = scheduled_.front();
+            scheduled_.pop();
+            
+            auto& p = h.promise();
+            p.state_ = task_state::ACTIVE;
+
+            h.resume();
+            
+            if (h.done()) {
+                p.state_ = task_state::DONE;
+            } else if (p.state_ == task_state::ACTIVE) {
+                // Should be either suspended or scheduled, so force zombie
+                p.state_ = task_state::ZOMBIE;
+            } 
+        }
         void run() {
-            while (true) {
-                if (!scheduled_tasks.empty()) {
-                    auto& t = *scheduled_tasks.front();
-                    scheduled_tasks.pop();
-                    t.state_ = task_state::ACTIVE;
+            schedule_all_suspended();
 
-                    std::cout << __func__ << " resume" << std::endl;
-                    t.resume();
-                    
-                    if (t.done()) {
-                        registered_tasks.erase(&t);
-                        t.destroy();
-                        t.state_ = task_state::INACTIVE;
-                    } else if (t.state_ == task_state::ACTIVE) {
-                        // Should be either suspended or scheduled, so force zombie
-                        t.state_ = task_state::ZOMBIE;
-                    }
-                }
+            for ( ; ; ) {
+                run_once();
             }
         }
 
     };
 
-
+#if 1
 
     template <typename A, typename S>
     concept Awaitable = requires(A a, async_task<S>::handle_type& t) {
@@ -218,22 +230,29 @@ namespace adva::corocore {
 
     template <typename A, typename S>
     struct scheduler_friend {
+        using handle_type = S::handle_type;
+
         scheduler_friend() : s_(S::get_instance()) { 
             static_assert(Awaitable<A, S>, "A is not awaitable");
         }
+
     private:
         S& s_;
+    
     protected:
-        bool schedule_active(async_task<S>& t) { return s_.schedule_active(t); }
+        bool schedule_active(handle_type& h) { return s_.schedule_active(h); }
     };
 
     template <typename S>
     struct yield_awaitable : public scheduler_friend<yield_awaitable<S>, S> {
+        using handle_type = S::handle_type;
         using base_type = scheduler_friend<yield_awaitable<S>, S>;
+
+        // Awaitable interface
         bool await_ready() { return false; }
-        bool await_suspend(async_task<S>::handle_type& h) { 
-            std::cout << "suspend" << std::endl;
-            if (!base_type::schedule_active(static_cast<async_task<S>&>(h))) { 
+        bool await_suspend(handle_type& h) { 
+            std::cout << "suspend  " << &h << std::endl;
+            if (!base_type::schedule_active(h)) { 
                 std::cout << "E" << std::endl;
             }
             return true;
@@ -242,7 +261,11 @@ namespace adva::corocore {
         void scheduler_callable()  { }
 
     };
-    template <typename S> yield_awaitable(S) -> yield_awaitable<S>;
+
+    /*template <typename S>
+    struct event_awaitable*/
+    // template <typename S> yield_awaitable(S) -> yield_awaitable<S>;
+    #endif
 }
 
 #endif
