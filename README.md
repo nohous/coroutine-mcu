@@ -2,10 +2,14 @@
 
 ## Files
 
-`etl/` - the ETL library
-`cmake/toolchain-stm32g7.cmake` - Bare-metal CMake toolchain configuration
-`main.cpp` - main experiments source
-`syscalls.c` - syscall stubs to make linker stop complaining, stolen from STM32Cube 
+- **`corocore/scheduler.h` - the coroutine scheduler templates**
+- `corocore/arch/*` - TBD: architecture specifics
+- `etl/` - the ETL library
+- `cmake/toolchain-stm32g7.cmake` - Bare-metal CMake toolchain configuration
+- `main.cpp` - main experiments source
+- `syscalls.c` - syscall stubs to make linker stop complaining, stolen from STM32Cube 
+
+Other files are just temporary experiments, to-be-deleted.
 
 ## Compilation
 
