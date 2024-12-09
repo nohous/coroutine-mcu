@@ -77,8 +77,12 @@ public:
         // Promise interface
         async_task_type get_return_object() noexcept { 
             auto h = handle_type::from_promise(*this);
-            scheduler_type::get_instance().insert_task(h);
-            return async_task_type(h); // Prvalue is materialized on caller's stack
+            if (!scheduler_type::get_instance().insert_task(h)) {
+                h.destroy();
+                h = async_task_type::null_handle;
+            }
+            // Prvalue is materialized on caller's stack
+            return async_task_type(h);
         }
         std::suspend_always initial_suspend() noexcept { return {}; }
         std::suspend_always final_suspend() noexcept { return {}; }
@@ -294,6 +298,7 @@ struct event_awaitable : public scheduler_friend<event_awaitable<S>, S> {
     void activate() { 
         if (handle_) {
             base_type::schedule_suspended(handle_); 
+            // TODO: reset state after activation?
         } else {
             activated_early_ = true;
         }
@@ -305,7 +310,7 @@ struct event_awaitable : public scheduler_friend<event_awaitable<S>, S> {
         handle_ = h;
         return base_type::suspend_active(h);
     }
-    void await_resume()  { }
+    void await_resume() {}
 
 private:
     handle_type handle_;
@@ -318,6 +323,7 @@ concept Clock = requires(C c, typename C::time_type t, typename C::duration_type
     { t + d } -> std::convertible_to<typename C::time_type>;
     { t - d } -> std::convertible_to<typename C::time_type>;
     { t <=> t } -> std::convertible_to<std::strong_ordering>;
+    { d <=> d } -> std::convertible_to<std::strong_ordering>;
 };
 
 template <Clock C, typename S>

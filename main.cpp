@@ -46,7 +46,7 @@ async_task task1(int a, event& e)
     co_return;
 }
 
-async_task task2(int a, timer_service& ts)
+async_task task2(int a, timer_service& ts, event& e)
 {
     for (int i = 0; ; i+=a) {
         std::cout << "task 2: " << i << std::endl;
@@ -65,7 +65,7 @@ int main()
     timer_service ts{c};
 
     auto t1 = task1(1, e);
-    auto t2 = task2(-1, ts);
+    auto t2 = task2(-1, ts, e);
 
     if (t1.invalid()) {
         std::cout << "failed to create task" << std::endl;
