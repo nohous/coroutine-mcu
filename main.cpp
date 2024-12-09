@@ -9,12 +9,12 @@ namespace cc = corocore;
 struct clock_mock {
     using time_type = int;
 
-    time_type now() { 
-        std::cout << "tick " << now_ << std::endl;
-        return now_;
-    }
+    time_type now() { return now_; }
 
-    void advance() { now_++; }
+    void advance() { 
+        std::cout << "tick " << now_ << std::endl;
+        now_++; 
+    }
 
 private:
     time_type now_ = 0;
@@ -55,7 +55,6 @@ async_task task2(int a, timer_service& ts)
 
 int main()
 {
-
     auto& s = app_scheduler::get_instance();
 
     event e{};
@@ -67,6 +66,9 @@ int main()
     auto t1 = task1(1, e);
     auto t2 = task2(-1, ts);
     
+    ts.sleep_until(40);
+    ts.sleep_until(20);
+    ts.sleep_until(30);
 
     s.schedule_all_suspended();
 
@@ -74,8 +76,7 @@ int main()
         s.run_once();
         ts.run_once();
         c.advance();
-        std::cout << "main" << c.now() << std::endl;
-        if (c.now() > 1000) e.activate();
+        if (c.now() == 1000) e.activate();
         std::this_thread::sleep_for(std::chrono::duration<double>(0.01));
     }
 

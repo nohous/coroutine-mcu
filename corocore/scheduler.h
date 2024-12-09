@@ -372,20 +372,19 @@ struct timer_service : public scheduler_friend<timer_service<C, S>, S> {
     event_awaitable<S>& sleep_until(time_type t) {
         auto end = timers_.end();
         auto it  = timers_.begin();
-        auto it_prev = it;
+        auto it_prev = timers_.begin();
         auto* tim = timer_pool_.create(t);
 
         std::cout << "sleep_until" << std::endl;
 
         if (tim == nullptr) { /* tell your grandma */ }
 
-        for ( ; it != end; it++) {
-            if (it->t < t) break;
-            it_prev = it;
+        for ( ; it != end; it_prev = it, it++) {
+            if (t < it->t) break;
         }
 
         // TODO: un-uglify
-        if (it_prev == timers_.begin()) {
+        if (it == timers_.begin()) {
             timers_.push_front(*tim);
         } else {
             timers_.insert_after(it_prev, *tim);
