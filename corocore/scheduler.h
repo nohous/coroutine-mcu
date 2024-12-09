@@ -6,17 +6,15 @@
 #include <functional>
 #include <utility>
 #include <tuple>
-#include <chrono>
+#include <array>
 #include <etl/utility.h>
 #include <etl/flat_set.h>
 #include <etl/queue.h>
 #include <etl/priority_queue.h>
-#include <etl/intrusive_queue.h>
+#include <etl/intrusive_forward_list.h>
 #include <etl/optional.h>
 
 namespace adva::corocore {
-
-namespace chr = std::chrono;
 
 template <typename C>
 concept SchedulerConfig = requires {
@@ -25,7 +23,7 @@ concept SchedulerConfig = requires {
 };
 
 struct scheduler_config_default {
-    static constexpr size_t couroutine_alloc_granularity = 16;
+    static constexpr size_t max_task_count = 16;
     static constexpr size_t timer_count = 16;
 };
 
@@ -319,11 +317,13 @@ struct timer_service : public scheduler_friend<timer_service<C, S>, S> {
     using base_type = scheduler_friend<timer_service<C, S>, S>;
     using handle_type = S::handle_type;
 
-    struct timer {
+    struct timer : etl::forward_link<0>{
         time_type t;
         event_awaitable<S> e;
 
-        timer(time_type t, event_awaitable<S>&& e) : t(t), e(std::move(e)) {}
+        timer(time_type t) noexcept : t(t) {}
+
+        //timer(time_type t, event_awaitable<S>&& e) : t(t), e(std::move(e)) {}
         timer(timer&& other) noexcept 
             : t(std::move(other.t)), 
               e(std::move(other.e)) 
@@ -352,31 +352,57 @@ struct timer_service : public scheduler_friend<timer_service<C, S>, S> {
         auto now = clock_.now();
 
         std::cout << "timer_service::run_once()" << std::endl;
+        #if 1
         if (timers_.empty()) return false;
 
-        auto& timer = timers_.top();
+        auto& timer = timers_.front();
         std::cout << "timer " << timer.t << ", now " << now <<  std::endl;
         if (now >= timer.t) {
             timer.e.activate();
-            timers_.pop();
+            timers_.pop_front();
+            timer_pool_.destroy(&timer);
             std::cout << "pop" << std::endl;
             return true;
         }
+        #endif
 
         return false;
     }
 
     event_awaitable<S>& sleep_until(time_type t) {
-        event_awaitable<S> e{};
-        timer tmr(t, {});
-        timers_.push(tmr);
-        return e;
+        auto end = timers_.end();
+        auto it  = timers_.begin();
+        auto it_prev = it;
+        auto* tim = timer_pool_.create(t);
+
+        std::cout << "sleep_until" << std::endl;
+
+        if (tim == nullptr) { /* tell your grandma */ }
+
+        for ( ; it != end; it++) {
+            if (it->t < t) break;
+            it_prev = it;
+        }
+
+        // TODO: un-uglify
+        if (it_prev == timers_.begin()) {
+            timers_.push_front(*tim);
+        } else {
+            timers_.insert_after(it_prev, *tim);
+        }
+        return tim->e;
+    }
+
+    event_awaitable<S>& sleep_for(time_type dur) {
+        return sleep_until(clock_.now() + dur);
     }
 
 private:
     S& s_;
     clock_type& clock_;
-    etl::priority_queue<timer, S::config_type::timer_count> timers_;
+    //etl::priority_queue<timer, S::config_type::timer_count> timers_;
+    etl::pool<timer, S::config_type::timer_count> timer_pool_;
+    etl::intrusive_forward_list<timer, etl::forward_link<0> > timers_;
 };
 
 }
