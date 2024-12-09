@@ -65,6 +65,10 @@ int main()
 
     auto t1 = task1(1, e);
     auto t2 = task2(-1, ts);
+
+    if (t1.invalid()) {
+        std::cout << "failed to create task" << std::endl;
+    }
     
     ts.sleep_until(40);
     ts.sleep_until(20);

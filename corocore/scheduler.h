@@ -7,12 +7,9 @@
 #include <utility>
 #include <tuple>
 #include <array>
-#include <etl/utility.h>
 #include <etl/flat_set.h>
 #include <etl/queue.h>
-#include <etl/priority_queue.h>
 #include <etl/intrusive_forward_list.h>
-#include <etl/optional.h>
 
 namespace adva::corocore {
 
@@ -52,37 +49,33 @@ public:
     using async_task_type = async_task<scheduler_type>;
     using handle_type = std::coroutine_handle<async_task_type::promise_type>;
 
+    friend scheduler_type;
+
     struct promise_type {
     private:
         friend scheduler_type;
+        friend async_task_type;
 
         task_state state_;
 
     public:
 
         promise_type() : state_(task_state::INACTIVE) {}
-        #if 0
-        static async_task get_return_object_on_allocation_failure()
+        static async_task_type get_return_object_on_allocation_failure()
         {
-            std::cerr << __func__ << '\n';
-            //throw std::bad_alloc(); // or, return Coroutine(nullptr);
+            return async_task_type(async_task_type::null_handle);
         }
-        #endif
         void* operator new(std::size_t n) noexcept
         {
             void *mem = new char[n];
-            std::cout << __func__ <<  " " << mem << " " << n << std::endl;
             return mem;
         }
         ~promise_type() {
             scheduler_type::get_instance().erase_task(handle_type::from_promise(*this));
-            std::cout << __func__ << std::endl;
         }
 
         // Promise interface
         async_task_type get_return_object() noexcept { 
-            std::cout << __func__ << " gro " << std::endl;
-            
             auto h = handle_type::from_promise(*this);
             scheduler_type::get_instance().insert_task(h);
             return async_task_type(h); // Prvalue is materialized on caller's stack
@@ -95,16 +88,13 @@ public:
     };
 
 private:
-    friend scheduler_type;
-
     handle_type handle_;
 
-private:
-    explicit async_task(handle_type& h) noexcept : handle_(std::move(h)) { 
-        std::cout <<  __func__ << " " << this << " move handle " << &h << std::endl;
-    }
+    static handle_type null_handle;
 
-    promise_type& promise() noexcept { return handle_.promise(); }
+private:
+    explicit async_task(handle_type& h) noexcept : handle_(std::move(h)) { }
+    promise_type& promise() const noexcept { return handle_.promise(); }
 
 public:
     async_task() = delete;
@@ -112,10 +102,8 @@ public:
     async_task& operator=(const async_task&) = delete;
 
     async_task(async_task&& other) noexcept 
-        : handle_(std::exchange(other.handle_, nullptr))
-    {
-        std::cout <<  __func__ << " move" << std::endl;
-    }
+        : handle_(std::exchange(other.handle_, nullptr)) 
+    {}
     async_task& operator=(async_task&& other) noexcept {
         if (this != &other) {
             if (handle_) handle_.destroy();
@@ -124,11 +112,25 @@ public:
         return *this;
     }
 
-    ~async_task() noexcept { std::cout << __func__ << std::endl; 
-        if (handle_) handle_.destroy(); }
-    task_state state() const noexcept { return promise()._state; }
+    ~async_task() noexcept { 
+        if (handle_) {
+            handle_.destroy(); 
+        }
+    }
+    task_state state() const noexcept { 
+        if (handle_) {
+            return promise().state_; 
+        } else {
+            return task_state::ZOMBIE;
+        }
+    }
+    bool invalid() const noexcept {
+        return state() == task_state::ZOMBIE;
+    }
+};
 
-};    
+template <typename S>
+async_task<S>::handle_type async_task<S>::null_handle{nullptr};
 
 template <SchedulerConfig C> 
 class scheduler {
@@ -282,11 +284,8 @@ struct event_awaitable : public scheduler_friend<event_awaitable<S>, S> {
     using base_type = scheduler_friend<event_awaitable<S>, S>;
 
     event_awaitable() : base_type(),  h_(nullptr) {}
-    event_awaitable(event_awaitable const& other) noexcept : base_type(), h_(other.h_) {}
-    event_awaitable& operator=(event_awaitable const& other) noexcept {
-        h_ = other.h_;
-        return *this;
-    }
+    event_awaitable(event_awaitable const& other) = delete;
+    event_awaitable& operator=(event_awaitable const& other) = delete;
         
     void activate() { if (h_) base_type::schedule_suspended(h_); }
 
@@ -351,20 +350,15 @@ struct timer_service : public scheduler_friend<timer_service<C, S>, S> {
     bool run_once() {
         auto now = clock_.now();
 
-        std::cout << "timer_service::run_once()" << std::endl;
-        #if 1
         if (timers_.empty()) return false;
 
         auto& timer = timers_.front();
-        std::cout << "timer " << timer.t << ", now " << now <<  std::endl;
         if (now >= timer.t) {
             timer.e.activate();
             timers_.pop_front();
             timer_pool_.destroy(&timer);
-            std::cout << "pop" << std::endl;
             return true;
         }
-        #endif
 
         return false;
     }
@@ -399,7 +393,6 @@ struct timer_service : public scheduler_friend<timer_service<C, S>, S> {
 private:
     S& s_;
     clock_type& clock_;
-    //etl::priority_queue<timer, S::config_type::timer_count> timers_;
     etl::pool<timer, S::config_type::timer_count> timer_pool_;
     etl::intrusive_forward_list<timer, etl::forward_link<0> > timers_;
 };
