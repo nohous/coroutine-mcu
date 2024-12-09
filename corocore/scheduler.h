@@ -283,22 +283,33 @@ struct event_awaitable : public scheduler_friend<event_awaitable<S>, S> {
     using handle_type = S::handle_type;
     using base_type = scheduler_friend<event_awaitable<S>, S>;
 
-    event_awaitable() : base_type(),  h_(nullptr) {}
+    event_awaitable() 
+        : base_type(),  
+          handle_(nullptr), 
+          activated_early_(false) 
+    {}
     event_awaitable(event_awaitable const& other) = delete;
     event_awaitable& operator=(event_awaitable const& other) = delete;
         
-    void activate() { if (h_) base_type::schedule_suspended(h_); }
+    void activate() { 
+        if (handle_) {
+            base_type::schedule_suspended(handle_); 
+        } else {
+            activated_early_ = true;
+        }
+    }
 
     // Awaitable interface
-    bool await_ready() { return false; }
+    bool await_ready() { return activated_early_; }
     bool await_suspend(handle_type& h) {
-        h_ = h;
+        handle_ = h;
         return base_type::suspend_active(h);
     }
     void await_resume()  { }
 
 private:
-    handle_type h_;
+    handle_type handle_;
+    bool activated_early_;
 };
 
 template <typename C>
@@ -364,14 +375,12 @@ struct timer_service : public scheduler_friend<timer_service<C, S>, S> {
     }
 
     event_awaitable<S>& sleep_until(time_type t) {
-        auto end = timers_.end();
-        auto it  = timers_.begin();
-        auto it_prev = timers_.begin();
+        auto it = timers_.begin(), it_prev = timers_.begin();
         auto* tim = timer_pool_.create(t);
 
-        if (tim == nullptr) { /* tell your grandma */ }
+        if (tim == nullptr) return null_event;
 
-        for ( ; it != end; it_prev = it, it++) {
+        for ( ; it != timers_.end(); it_prev = it, it++) {
             if (t < it->t) break;
         }
 
@@ -393,7 +402,12 @@ private:
     clock_type& clock_;
     etl::pool<timer, S::config_type::timer_count> timer_pool_;
     etl::intrusive_forward_list<timer, etl::forward_link<0> > timers_;
+
+    static event_awaitable<S> null_event;
 };
+template <Clock C, typename S>
+event_awaitable<S> timer_service<C, S>::null_event{};
+
 
 }
 
