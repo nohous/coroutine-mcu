@@ -333,20 +333,6 @@ struct timer_service : public scheduler_friend<timer_service<C, S>, S> {
 
         timer(time_type t) noexcept : t(t) {}
 
-        //timer(time_type t, event_awaitable<S>&& e) : t(t), e(std::move(e)) {}
-        timer(timer&& other) noexcept 
-            : t(std::move(other.t)), 
-              e(std::move(other.e)) 
-        {}
-        
-        timer& operator=(timer&& other) noexcept {
-            if (this != &other) {
-                t = std::move(other.t);
-                e = std::move(other.e);
-            }
-            return *this;
-        }
-
         bool operator<(timer const&  other) const {
             return t < other.t;
         }
@@ -384,7 +370,6 @@ struct timer_service : public scheduler_friend<timer_service<C, S>, S> {
             if (t < it->t) break;
         }
 
-        // TODO: un-uglify
         if (it == timers_.begin()) {
             timers_.push_front(*tim);
         } else {
