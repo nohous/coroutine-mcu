@@ -8,6 +8,7 @@ namespace cc = corocore;
 
 struct clock_mock {
     using time_type = int;
+    using duration_type = int;
 
     time_type now() { return now_; }
 

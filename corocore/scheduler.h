@@ -1,10 +1,10 @@
 #ifndef ADVAOS_SCHEDULER_H_
 #define ADVAOS_SCHEDULER_H_
 
-#include <iostream>
 #include <coroutine>
 #include <functional>
 #include <utility>
+#include <compare>
 #include <tuple>
 #include <array>
 #include <etl/flat_set.h>
@@ -302,11 +302,11 @@ private:
 };
 
 template <typename C>
-concept Clock = requires(C c, typename C::time_type t) {
+concept Clock = requires(C c, typename C::time_type t, typename C::duration_type d) {
     { c.now() } -> std::convertible_to<typename C::time_type>;
-    //{ tt <=> tt } -> std::three_way_comparable;
-    { t < t } -> std::convertible_to<bool>;
-    { t >= t } -> std::convertible_to<bool>;
+    { t + d } -> std::convertible_to<typename C::time_type>;
+    { t - d } -> std::convertible_to<typename C::time_type>;
+    { t <=> t } -> std::convertible_to<std::strong_ordering>;
 };
 
 template <Clock C, typename S>
@@ -368,8 +368,6 @@ struct timer_service : public scheduler_friend<timer_service<C, S>, S> {
         auto it  = timers_.begin();
         auto it_prev = timers_.begin();
         auto* tim = timer_pool_.create(t);
-
-        std::cout << "sleep_until" << std::endl;
 
         if (tim == nullptr) { /* tell your grandma */ }
 
