@@ -298,7 +298,8 @@ struct event_awaitable : public scheduler_friend<event_awaitable<S>, S> {
     void activate() { 
         if (handle_) {
             base_type::schedule_suspended(handle_); 
-            // TODO: reset state after activation?
+            handle_ = nullptr;
+            activated_early_ = false;
         } else {
             activated_early_ = true;
         }
@@ -330,6 +331,7 @@ template <Clock C, typename S>
 struct timer_service : public scheduler_friend<timer_service<C, S>, S> {
     using clock_type = C;
     using time_type = clock_type::time_type;
+    using duration_type = clock_type::duration_type;
     using base_type = scheduler_friend<timer_service<C, S>, S>;
     using handle_type = S::handle_type;
 
@@ -384,7 +386,7 @@ struct timer_service : public scheduler_friend<timer_service<C, S>, S> {
         return tim->e;
     }
 
-    event_awaitable<S>& sleep_for(time_type dur) {
+    event_awaitable<S>& sleep_for(duration_type dur) {
         return sleep_until(clock_.now() + dur);
     }
 
