@@ -67,9 +67,16 @@ void f2() {
 
 int r = 0, s = 0;
 
-coro test () {
-    if (r++ < 1) co_await test();
+coro coro_sleep(timer_service &ts) {
+    co_await ts.sleep_for(2000ms);
+
+    pr_debug("post sleep");
+}
+
+coro coro_coro(timer_service& ts) {
     pr_debug("sub-task r " << r);
+    co_await coro_sleep(ts);
+    pr_debug("post await");
     /*if (s++ < 1) co_await test();
     pr_debug("sub-task s " << r);1*/
     
@@ -85,7 +92,7 @@ async_task task1(int a, timer_service& ts, event& e, int (*f)())
         if (i == 5) co_return; // cc::exception("Who knows what happened");
         pr_debug(i);
         pr_debug("task 1: calling");
-        co_await test();
+        co_await coro_coro(ts);
         pr_debug("task 1: returned");
         f();
         co_await ts.sleep_for(500ms);
