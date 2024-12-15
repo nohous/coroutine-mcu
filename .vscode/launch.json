@@ -4,7 +4,7 @@
             "name": "C/C++: g++ build and debug active file",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${fileDirname}/build/corocore_test", 
+            "program": "${workspaceFolder}/build/corocore_test", 
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",

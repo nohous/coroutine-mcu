@@ -12,10 +12,11 @@ add_subdirectory(etl)
 add_subdirectory(corocore)
 add_executable(corocore_test)
 #add_library(syscalls.o OBJECT syscalls.c)
+target_include_directories(corocore_test PRIVATE corocore/include)
 target_include_directories(corocore_test PRIVATE ${PROJECT_SOURCE_DIR})
 target_sources(corocore_test PRIVATE 
 #    syscalls.c
-    main.cpp
+    samples/basic/main.cpp
 )
 #target_link_libraries(corocore_test PRIVATE syscalls.o)
 target_link_libraries(corocore_test PRIVATE etl::etl)
