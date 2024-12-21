@@ -55,6 +55,36 @@ protected:
 };
 
 template <typename S>
+/**
+ * @brief A coroutine function type that can be awaited within tasks or other coroutines
+ * 
+ * @tparam S The scheduler type that will manage this coroutine
+ * 
+ * The async_func class represents a coroutine that:
+ * - Can be awaited by tasks (async_task) or other async_func coroutines
+ * - Maintains a call stack through the scheduler
+ * - Suspends initially and finally
+ * - Returns void
+ * 
+ * Key features:
+ * - Integrates with a task-based scheduling system
+ * - Supports nested coroutine calls by maintaining a call stack
+ * - Provides basic exception handling through std::terminate
+ * - Custom memory management through operator new
+ * 
+ * Usage example:
+ * @code
+ * async_func<MyScheduler> my_coroutine() {
+ *     // Coroutine body
+ *     co_return;
+ * }
+ * @endcode
+ * 
+ * The coroutine can be awaited using co_await:
+ * @code
+ * co_await my_coroutine();
+ * @endcode
+ */
 class async_func {
 public:
     struct promise_type;
@@ -168,6 +198,31 @@ enum class task_state {
 };
 
 template <typename S>
+/**
+ * @brief A class representing an asynchronous task that can be scheduled and executed.
+ * 
+ * @tparam S The scheduler type that will manage this task
+ * 
+ * The async_task class implements a coroutine-based asynchronous task that can be scheduled 
+ * and executed by a scheduler. It maintains its own execution state and call stack for nested
+ * asynchronous function calls.
+ * 
+ * Key features:
+ * - Manages task lifecycle and state
+ * - Supports nested asynchronous function calls via call stack
+ * - Integrates with a scheduler for execution
+ * - Provides move semantics but prohibits copying
+ * - Automatically cleans up resources when destroyed
+ * 
+ * The task can be in one of several states:
+ * - INACTIVE: Task is created but not yet running
+ * - ACTIVE: Task is currently executing
+ * - ZOMBIE: Task is invalid/destroyed
+ * 
+ * @note This class is not copyable but is movable
+ * @note Tasks are automatically registered with the scheduler upon creation
+ * @warning Invalid tasks (in ZOMBIE state) cannot be resumed or used
+ */
 class async_task {
 public:
     struct promise_type;
@@ -301,6 +356,35 @@ template <typename S>
 async_task<S>::async_task_handle_type async_task<S>::null_handle{nullptr};
 
 template <SchedulerConfig C> 
+/**
+ * @brief A cooperative scheduler for managing asynchronous tasks and functions
+ * 
+ * @tparam C Configuration type that defines scheduler parameters like maximum task count
+ * 
+ * The scheduler class provides functionality to:
+ * - Manage lifecycle of async tasks and functions
+ * - Schedule and suspend tasks
+ * - Execute scheduled tasks in a cooperative manner
+ * 
+ * Key features:
+ * - Single instance (singleton) design
+ * - Task state management (SUSPENDED, SCHEDULED, ACTIVE, DONE, ZOMBIE)
+ * - Safe task scheduling with duplicate prevention
+ * - Cooperative multitasking through run_once() and run_one() methods
+ * 
+ * The scheduler maintains:
+ * - A set of task handles for tracking valid tasks
+ * - A queue of scheduled tasks pending execution
+ * 
+ * Usage example:
+ * @code
+ * auto& sched = scheduler<config>::get_instance();
+ * sched.run_one(); // Runs scheduler loop
+ * @endcode
+ * 
+ * @note This scheduler implements cooperative multitasking, meaning tasks must
+ *       voluntarily yield control back to the scheduler
+ */
 class scheduler {
 public:
     using config_type = C;
@@ -426,6 +510,17 @@ concept Awaitable = requires(A a, S::async_task_handle_type& h) {
 };
 
 
+/**
+ * @brief A friend class providing scheduling functionality for derived classes.
+ * 
+ * This class provides a common interface for scheduling and managing tasks within a scheduler system.
+ * It ensures that derived classes are either Awaitable or Service compatible with the scheduler.
+ * 
+ * @tparam D The derived class type
+ * @tparam S The scheduler type
+ * 
+ * @note The derived class must satisfy either Awaitable<D, S> or Service<D, S> concept
+ */
 template <typename D, typename S>
 struct scheduler_friend {
     using async_task_handle_type = S::async_task_handle_type;
@@ -454,6 +549,15 @@ private:
     S& s_;
 };
 
+/**
+ * @brief An awaitable that yields control back to the scheduler
+ * 
+ * This awaitable allows a coroutine to voluntarily give up its execution time
+ * to allow other coroutines to run. When awaited, it suspends the current
+ * task and reschedules it for later execution.
+ * 
+ * @tparam S The scheduler type this awaitable works with
+ */
 template <typename S>
 struct yield_awaitable : public scheduler_friend<yield_awaitable<S>, S> {
     using async_task_handle_type = S::async_task_handle_type;
@@ -468,51 +572,6 @@ struct yield_awaitable : public scheduler_friend<yield_awaitable<S>, S> {
 // "Deduction guide":
 // template <typename S> yield_awaitable(S) -> yield_awaitable<S>;
 
-template <typename S, typename... A>
-struct any_of_awaitable : public scheduler_friend<any_of_awaitable<S, A...>, S> {
-    static_assert((Awaitable<A, S> && ...), "All variadic template parameters must be Awaitable");
-
-    using async_task_handle_type = typename S::async_task_handle_type;
-    using base_type = scheduler_friend<any_of_awaitable<S, A...>, S>;
-
-
-    any_of_awaitable(A&... awaitables) 
-        : base_type()
-        , handles_{}
-        , refs_{awaitables...}
-    {}
-    /*template <Handle<S> H>
-    bool await_suspend(H& h) { return base_type::schedule_active(h); }
-    void await_resume()  {}*/
-
-    // Awaitable interface
-    bool await_ready() {
-        return all_ready(std::index_sequence_for<A...>{});
-    }
-    bool await_suspend(async_task_handle_type& h) {
-        return suspend_all(h, std::index_sequence_for<A...>{});
-    }
-
-
-private:
-    template<size_t... Is>
-    bool all_ready(std::index_sequence<Is...>) {
-        return (std::get<Is>(refs_).await_ready() && ...);
-    }
-
-    template<size_t... Is>
-    bool suspend_all(async_task_handle_type& h, std::index_sequence<Is...>) {
-        bool any_suspended = false;
-        ((
-            [&]() { if (std::get<Is>(refs_).await_suspend(h)) any_suspended = true; }()
-        ), ...);
-        return any_suspended && base_type::suspend_active(h);
-    }
-
-private:
-    etl::flat_set<async_task_handle_type, sizeof...(A)> handles_;
-    std::tuple<A&...> refs_;  // Store references to awaitables
-};
 
 #if 0
 
@@ -580,36 +639,71 @@ combined_awaitable(A&...) -> combined_awaitable<S, A...>;
 
 #endif
 
-template <typename S>
-struct event_awaitable : public scheduler_friend<event_awaitable<S>, S> {
-    using async_task_handle_type = S::async_task_handle_type;
-    using base_type = scheduler_friend<event_awaitable<S>, S>;
+template <typename S> 
+struct event {
+    using scheduler_type = S;
+    using event_type = event<S>;
+    using event_awaitable_type = event_awaitable<event_type>;
+    using awaitable_list = etl::intrusive_forward_list<event_awaitable_type, etl::forward_link<0>>;
 
-    event_awaitable() 
-        : base_type(),  
-          handle_(nullptr)
-    {}
-    event_awaitable(event_awaitable const& other) = delete;
-    event_awaitable& operator=(event_awaitable const& other) = delete;
-        
+    event(bool auto_reset = true) : auto_reset_(auto_reset) {}
+
+    void activate() { 
+        active_ = true; 
+        for (auto& awaitable : awaitables_) {
+            awaitable.notify();
+        }
+    }
+    void reset() { active_ = false; }
+    bool is_active() const { return active_; }
+
+private:
+    bool auto_reset_;
+    bool active_ = false;
+    awaitable_list awaitables_;
+
+};
+
+template <typename E>
+struct event_awaitable : public scheduler_friend<event_awaitable<E>, typename E::scheduler_type>, public etl::forward_link<0> {
+    using scheduler_type = typename E::scheduler_type;
+    using async_task_handle_type = scheduler_type::async_task_handle_type;
+    using base_type = scheduler_friend<event_awaitable<E>, scheduler_type>;
+
+    event_awaitable(E& e) : event_(e) {}
+    ~event_awaitable() { 
+        if (handle_) {
+            event_.awaitables_.erase(*this);
+        }
+    }
+
     void notify() { 
         if (handle_) {
-            base_type::schedule_suspended(handle_); 
+            base_type::schedule_active(handle_);
             handle_ = nullptr;
         }
     }
 
-    // Awaitable interface
-    bool await_ready() { return !!handle_; }
+    // Awaitable interface 
+    bool await_ready() { return event_.is_active(); }
     template <Handle<S> H>
     bool await_suspend(H& h) {
-        handle_ = h.promise().task_handle();
-        return base_type::suspend_active(h);
+        if (!event_.is_active()) {
+            handle_ = h.promise().task_handle();
+            event_.awaitables_.push_front(*this);
+            return base_type::suspend_active(h);
+        }
+        return false;
     }
-    void await_resume() {}
+    void await_resume() {
+        event_.awaitables_.erase(*this);
+        handle_ = nullptr;
+    }
 
 private:
+    E& event_;
     async_task_handle_type handle_;
+
 };
 
 template <typename C>
