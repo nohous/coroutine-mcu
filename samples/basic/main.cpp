@@ -39,7 +39,7 @@ struct app_scheduler_config {
 
 using app_scheduler = cc::scheduler<app_scheduler_config>;
 using yield = cc::yield_awaitable<app_scheduler>;
-using event = cc::event_awaitable<app_scheduler>;
+using event = cc::event<app_scheduler>;
 using timer_service = cc::timer_service<clock_std_chrono, app_scheduler>;
 using async_task = app_scheduler::async_task_type;
 using async_func = app_scheduler::async_func_type;

@@ -639,12 +639,17 @@ combined_awaitable(A&...) -> combined_awaitable<S, A...>;
 
 #endif
 
+template <typename E>
+struct event_awaitable;
+
 template <typename S> 
 struct event {
     using scheduler_type = S;
     using event_type = event<S>;
-    using event_awaitable_type = event_awaitable<event_type>;
+    using event_awaitable_type = event_awaitable<scheduler_type>;
     using awaitable_list = etl::intrusive_forward_list<event_awaitable_type, etl::forward_link<0>>;
+
+    friend event_awaitable_type;
 
     event(bool auto_reset = true) : auto_reset_(auto_reset) {}
 
@@ -654,8 +659,21 @@ struct event {
             awaitable.notify();
         }
     }
-    void reset() { active_ = false; }
-    bool is_active() const { return active_; }
+    void reset() { 
+        active_ = false; 
+        // TODO: check
+        if (auto_reset_) {
+            for (auto& awaitable : awaitables_) {
+                awaitable.notify();
+            }
+        }
+    }
+    bool is_active() { 
+        if (auto_reset_) reset();
+        return active_; 
+    }
+
+    auto operator co_await() { return event_awaitable_type(*this); }
 
 private:
     bool auto_reset_;
@@ -664,13 +682,14 @@ private:
 
 };
 
-template <typename E>
-struct event_awaitable : public scheduler_friend<event_awaitable<E>, typename E::scheduler_type>, public etl::forward_link<0> {
-    using scheduler_type = typename E::scheduler_type;
+template <typename S>
+struct event_awaitable : public scheduler_friend<event_awaitable<S>, S>, public etl::forward_link<0> {
+    using scheduler_type = S;
+    using event_type = event<scheduler_type>;
     using async_task_handle_type = scheduler_type::async_task_handle_type;
-    using base_type = scheduler_friend<event_awaitable<E>, scheduler_type>;
+    using base_type = scheduler_friend<event_awaitable<S>, S>;
 
-    event_awaitable(E& e) : event_(e) {}
+    event_awaitable(event_type& e) : event_(e) {}
     ~event_awaitable() { 
         if (handle_) {
             event_.awaitables_.erase(*this);
@@ -688,6 +707,7 @@ struct event_awaitable : public scheduler_friend<event_awaitable<E>, typename E:
     bool await_ready() { return event_.is_active(); }
     template <Handle<S> H>
     bool await_suspend(H& h) {
+        // TODO: check
         if (!event_.is_active()) {
             handle_ = h.promise().task_handle();
             event_.awaitables_.push_front(*this);
@@ -697,11 +717,14 @@ struct event_awaitable : public scheduler_friend<event_awaitable<E>, typename E:
     }
     void await_resume() {
         event_.awaitables_.erase(*this);
+        if (event_.auto_reset_ && event_.awaitables_.empty()) {
+            event_.reset();
+        }
         handle_ = nullptr;
     }
 
 private:
-    E& event_;
+    event_type& event_;
     async_task_handle_type handle_;
 
 };
@@ -724,13 +747,13 @@ struct timer_service : public scheduler_friend<timer_service<C, S>, S> {
     using async_task_handle_type = S::async_task_handle_type;
 
     struct timer : etl::forward_link<0>{
-        time_type time;
-        event_awaitable<S> event;
+        time_type time_;
+        event<S> event_;
 
-        timer(time_type t) noexcept : time(t) {}
+        timer(time_type t) noexcept : time_(t), event_(true) {}
 
         bool operator<(timer const&  other) const {
-            return time < other.time;
+            return time_ < other.time_;
         }
     };
 
@@ -746,8 +769,8 @@ struct timer_service : public scheduler_friend<timer_service<C, S>, S> {
         if (timers_.empty()) return false;
 
         auto& timer = timers_.front();
-        if (now >= timer.time) {
-            timer.event.notify();
+        if (now >= timer.time_) {
+            timer.event_.activate();
             timers_.pop_front();
             timer_pool_.destroy(&timer);
             return true;
@@ -756,14 +779,14 @@ struct timer_service : public scheduler_friend<timer_service<C, S>, S> {
         return false;
     }
 
-    event_awaitable<S>& sleep_until(time_type time) {
+    event_awaitable<S> sleep_until(time_type time) {
         auto it = timers_.begin(), it_prev = timers_.begin();
         auto* timer = timer_pool_.create(time);
 
-        if (timer == nullptr) return null_event;
+        if (timer == nullptr) return null_awaitable;
 
         for ( ; it != timers_.end(); it_prev = it, it++) {
-            if (time < it->time) break;
+            if (time < it->time_) break;
         }
 
         if (it == timers_.begin()) {
@@ -771,10 +794,10 @@ struct timer_service : public scheduler_friend<timer_service<C, S>, S> {
         } else {
             timers_.insert_after(it_prev, *timer);
         }
-        return timer->event;
+        return event_awaitable<S>(timer->event_);
     }
 
-    event_awaitable<S>& sleep_for(duration_type dur) {
+    event_awaitable<S> sleep_for(duration_type dur) {
         return sleep_until(clock_.now() + dur);
     }
 
@@ -784,10 +807,14 @@ private:
     etl::pool<timer, S::config_type::timer_count> timer_pool_;
     etl::intrusive_forward_list<timer, etl::forward_link<0> > timers_;
 
-    static event_awaitable<S> null_event;
+    static event<S> null_event;
+    static event_awaitable<S> null_awaitable;
 };
 template <Clock C, typename S>
-event_awaitable<S> timer_service<C, S>::null_event{};
+event<S> timer_service<C, S>::null_event{};
+
+template <Clock C, typename S>
+event_awaitable<S> timer_service<C, S>::null_awaitable{null_event};
 
 }
 #endif
