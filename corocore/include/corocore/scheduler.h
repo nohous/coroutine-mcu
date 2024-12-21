@@ -5,12 +5,14 @@
 #include <functional>
 #include <utility>
 #include <compare>
+#include <tuple>
 #include <etl/variant.h>
 #include <etl/flat_set.h>
 #include <etl/queue.h>
 #include <etl/intrusive_stack.h>
 #include <etl/intrusive_links.h>
 #include <etl/intrusive_forward_list.h>
+#include <etl/intrusive_list.h>
 
 #ifdef COROCORE_DEBUG
 
@@ -53,21 +55,21 @@ protected:
 };
 
 template <typename S>
-class coroutine {
+class async_func {
 public:
     struct promise_type;
    
     using scheduler_type = S;
     
-    using coroutine_type = coroutine<scheduler_type>;
-    using coroutine_handle_type = std::coroutine_handle<coroutine_type::promise_type>;
+    using async_func_type = async_func<scheduler_type>;
+    using async_func_handle_type = std::coroutine_handle<async_func_type::promise_type>;
 
     using async_task_type = async_task<scheduler_type>;
     using async_task_handle_type = async_task_type::async_task_handle_type;
 
     struct promise_type : public etl::forward_link<0> {
     private:
-        friend coroutine_type;
+        friend async_func_type;
         friend scheduler_type;
 
         async_task_handle_type task_handle_;
@@ -75,9 +77,9 @@ public:
     public:
 
         promise_type() : task_handle_(nullptr) {}
-        static coroutine_type get_return_object_on_allocation_failure()
+        static async_func_type get_return_object_on_allocation_failure()
         {
-            return coroutine(coroutine_type::null_handle);
+            return async_func_type(async_func_type::null_handle);
         }
         void* operator new(std::size_t n) noexcept
         {
@@ -88,14 +90,14 @@ public:
         ~promise_type() {
         }
 
-        async_task_handle_type get_task_handle() {
+        async_task_handle_type task_handle() {
             return task_handle_;
         }
 
         // Promise interface
-        coroutine_type get_return_object() noexcept {
-            auto h = coroutine_handle_type::from_promise(*this);
-            return coroutine(h);
+        async_func_type get_return_object() noexcept {
+            auto h = async_func_handle_type::from_promise(*this);
+            return async_func_type(h);
         }
         std::suspend_always initial_suspend() noexcept { 
             pr_debug("");
@@ -106,10 +108,10 @@ public:
             return {}; 
         }
         void return_void() noexcept {
-            pr_debug("coroutine: RETURN");
+            pr_debug("async_func: RETURN");
 
             if (task_handle_) {
-                task_handle_.promise().await_stack_pop();
+                task_handle_.promise().callstack_pop();
                 task_handle_.promise().resume();
             }
         }
@@ -119,37 +121,38 @@ public:
     };
 
 private:
-    explicit coroutine(coroutine_handle_type& h) noexcept : handle_(std::move(h)) { }
+    explicit async_func(async_func_handle_type& h) noexcept : handle_(std::move(h)) { }
     promise_type& promise() const noexcept { return handle_.promise(); }
 
 private:
-    coroutine_handle_type handle_;
+    async_func_handle_type handle_;
 
-    static coroutine_handle_type null_handle;
+    static async_func_handle_type null_handle;
+
 public:
 
     bool await_ready() { return false; }
-    coroutine_handle_type await_suspend(async_task_handle_type awaiter_handle) {
-        pr_debug("coroutine: SUSPEND FROM TASK");
+    async_func_handle_type await_suspend(async_task_handle_type awaiter_handle) {
+        pr_debug("async_func: SUSPEND FROM TASK");
         promise().task_handle_ = awaiter_handle;
-        promise().task_handle_.promise().await_stack_push(promise());
+        promise().task_handle_.promise().callstack_push(promise());
         return handle_;
     }
-    coroutine_handle_type await_suspend(coroutine_handle_type awaiter_handle) {
-        pr_debug("coroutine: SUSPEND FROM CORO");
+    async_func_handle_type await_suspend(async_func_handle_type awaiter_handle) {
+        pr_debug("async_func: SUSPEND FROM CORO");
         promise().task_handle_ = awaiter_handle.promise().task_handle_;
-        promise().task_handle_.promise().await_stack_push(promise());
+        promise().task_handle_.promise().callstack_push(promise());
         return handle_;
     }
     void await_resume() {
-        pr_debug("coroutine: RESUME");
-        promise().task_handle_.promise().await_stack_pop();
+        pr_debug("async_func: RESUME");
+        promise().task_handle_.promise().callstack_pop();
         promise().task_handle_ = nullptr;
     }
 
 };
 template <typename S>
-coroutine<S>::coroutine_handle_type coroutine<S>::null_handle{nullptr};
+async_func<S>::async_func_handle_type async_func<S>::null_handle{nullptr};
 
 enum class task_priority {
     LOW, MID, HIGH, ISR
@@ -175,25 +178,26 @@ public:
     using async_task_type = async_task<scheduler_type>;
     using async_task_handle_type = std::coroutine_handle<async_task_type::promise_type>;
 
-    using coroutine_type = coroutine<scheduler_type>;
-    using coroutine_handle_type = coroutine_type::coroutine_handle_type;
+    using async_func_type = async_func<scheduler_type>;
+    using async_func_handle_type = async_func_type::async_func_handle_type;
     //using coroutine_handle_type = std::coroutine_handle<coroutine_type::promise_type>;
 
     friend scheduler_type;
 
-    struct promise_type {
+    struct promise_type : etl::bidirectional_link<0> {
     private:
         //using coroutine_stack = etl::intrusive_stack<coroutine_type::promise_type, etl::forward_link<0> >;
         
-        using coroutine_promise_type = coroutine_type::promise_type;
-        using coroutine_stack = etl::intrusive_stack<coroutine_promise_type, etl::forward_link<0> >;
+        using async_func_promise_type = async_func_type::promise_type;
+        using async_func_stack = etl::intrusive_stack<async_func_promise_type, etl::forward_link<0> >;
 
         friend scheduler_type;
         friend async_task_type;
-        friend coroutine_type;
+        friend async_func_type;
 
         task_state state_;
-        coroutine_stack await_stack_;
+        task_priority priority_;
+        async_func_stack callstack_;
 
     public:
 
@@ -209,33 +213,34 @@ public:
             return mem;
         }
         ~promise_type() {
-            scheduler_type::get_instance().erase_task(async_task_handle_type::from_promise(*this));
+            scheduler_type::get_instance().erase_task(*this);
         }
 
-        async_task_handle_type get_task_handle() {
+        async_task_handle_type task_handle() {
             return async_task_handle_type::from_promise(*this);
         }
-        void await_stack_push(coroutine_promise_type& promise) {
+        void callstack_push(async_func_promise_type& promise) {
             pr_debug("");
-            await_stack_.push(promise);
+            callstack_.push(promise);
         }
-        void await_stack_pop() {
+        void callstack_pop() {
             pr_debug("");
-            if (!await_stack_.empty()) await_stack_.pop();
+            if (!callstack_.empty()) callstack_.pop();
         }
         void resume() {
             state_ = task_state::ACTIVE;
-            if (await_stack_.empty()) {
+            if (callstack_.empty()) {
                 async_task_handle_type::from_promise(*this).resume();
             } else {
-                coroutine_handle_type::from_promise(await_stack_.top()).resume();
+                async_func_handle_type::from_promise(callstack_.top()).resume();
             }
         }
 
         // Promise interface
         async_task_type get_return_object() noexcept { 
             auto h = async_task_handle_type::from_promise(*this);
-            if (!scheduler_type::get_instance().insert_task(h)) {
+            if (!scheduler_type::get_instance().insert_task(*this)) {
+                // Warning: "this" no longer valid after coroutine is destroyed via handle_.destroy()
                 h.destroy();
                 h = async_task_type::null_handle;
             }
@@ -302,16 +307,17 @@ public:
     using scheduler_type = scheduler<config_type>;
     using async_task_type = async_task<scheduler_type>;
     using async_task_handle_type = async_task_type::async_task_handle_type;
-    using coroutine_type = coroutine<scheduler_type>;
-    using coroutine_handle_type = coroutine_type::coroutine_handle_type;
+    using async_func_type = async_func<scheduler_type>;
+    using async_func_handle_type = async_func_type::async_func_handle_type;
 
     template <typename A, typename S> friend struct scheduler_friend;
     friend async_task_type;
-    friend coroutine_type;
+    friend async_func_type;
 
 private:
+    using async_task_promise_type = async_task_type::promise_type;
     using handle_set = etl::flat_set<async_task_handle_type, config_type::max_task_count>;
-    using scheduled_queue = etl::queue<async_task_handle_type, config_type::max_task_count>;
+    using scheduled_queue = etl::intrusive_list<async_task_promise_type, etl::bidirectional_link<0>>;
 
     handle_set handles_;
     scheduled_queue scheduled_;
@@ -319,15 +325,16 @@ private:
 private:
     scheduler() { }
 
-    bool insert_task(async_task_handle_type& h) {
+    bool insert_task(async_task_promise_type& p) {
+        auto h = p.task_handle();
         if (handles_.contains(h)) return false;
 
-        h.promise().state_ = task_state::SUSPENDED;
-        auto [it, result] = handles_.insert(h);
+        p.state_ = task_state::SUSPENDED;
+        auto [it, result] = handles_.insert(h); 
         return result;
     }
-    bool erase_task(async_task_handle_type const& h) {
-        return handles_.erase(h) > 0;
+    bool erase_task(async_task_promise_type& p) {
+        return handles_.erase(p.task_handle()) ;
     }
 
     bool schedule(async_task_handle_type& h, auto&& pred) {
@@ -337,11 +344,11 @@ private:
         if (!pred(p.state_)) return false;
         
         p.state_ = task_state::SCHEDULED;
-        scheduled_.push(h);
+        scheduled_.push_back(p);
         return true;
     }
-    bool schedule(coroutine_handle_type& handle, auto&& pred) {
-        auto task_handle = handle.promise().task_handle_;
+    bool schedule(async_func_handle_type& handle, auto&& pred) {
+        auto task_handle = handle.promise().task_handle();
         if (!task_handle) return false;
         return schedule(task_handle, pred);
     }
@@ -355,8 +362,8 @@ private:
         p.state_ = task_state::SUSPENDED;
         return true;
     }
-    bool suspend_active(coroutine_handle_type& handle) {
-        auto task_handle = handle.promise().task_handle_;
+    bool suspend_active(async_func_handle_type& handle) {
+        auto task_handle = handle.promise().task_handle();
         if (!task_handle) return false;
         return suspend_active(task_handle);
     }
@@ -367,7 +374,7 @@ public:
     void schedule_all_suspended() {
         for (auto& h: handles_) {
             if (h.promise().state_ != task_state::SUSPENDED) continue;
-            scheduled_.push(h);
+            scheduled_.push_back(h.promise());
         }
     }
     bool run_once() {
@@ -378,14 +385,12 @@ public:
             return false;
         }
 
-        auto& task_handle = scheduled_.front();
-        scheduled_.pop();
+        auto& task_promise = scheduled_.front();
+        scheduled_.pop_front();
         
-        auto& task_promise = task_handle.promise();
-
         task_promise.resume();
-        
-        if (task_handle.done()) {
+    
+        if (task_promise.task_handle().done()) {
             task_promise.state_ = task_state::DONE;
         } else if (task_promise.state_ == task_state::ACTIVE) {
             // Should be either suspended or scheduled, so force zombie
@@ -408,12 +413,18 @@ concept Service = requires(T s) {
     { s.run_once() } -> std::convertible_to<bool>;
 };
 
+template <typename H, typename S>
+concept Handle = requires(H h) {
+    { h.promise().task_handle() } -> std::convertible_to<typename S::async_task_handle_type>;
+};
+
 template <typename A, typename S>
-concept Awaitable = requires(A a, typename S::async_task_handle_type& h) {
+concept Awaitable = requires(A a, S::async_task_handle_type& h) {
     { a.await_ready() } -> std::convertible_to<bool>;
     { a.await_suspend(h) };
     { a.await_resume() };
 };
+
 
 template <typename D, typename S>
 struct scheduler_friend {
@@ -427,21 +438,20 @@ struct scheduler_friend {
         static_assert(Awaitable<D, S> || Service<D, S>, "derived class is not compatible");
     }
 
-private:
-    S& s_;
-
 protected:
-    template <typename H>
+    template <Handle<S> H>
     bool schedule_active(H& h) { 
         return s_.schedule(h, [](task_state state) { return state == task_state::ACTIVE; }); 
     }
-    template <typename H>
+    template <Handle<S> H>
     bool schedule_suspended(H& h) { 
         return s_.schedule(h, [](task_state state) { return state == task_state::SUSPENDED; }); 
     }
-    template <typename H>
+    template <Handle<S> H>
     bool suspend_active(H& h) { return s_.suspend_active(h); }
 
+private:
+    S& s_;
 };
 
 template <typename S>
@@ -451,12 +461,58 @@ struct yield_awaitable : public scheduler_friend<yield_awaitable<S>, S> {
 
     // Awaitable interface
     bool await_ready() { return false; }
-    template <typename H>
+    template <Handle<S> H>
     bool await_suspend(H& h) { return base_type::schedule_active(h); }
     void await_resume()  {}
 };
 // "Deduction guide":
 // template <typename S> yield_awaitable(S) -> yield_awaitable<S>;
+
+template <typename S, typename... A>
+struct any_of_awaitable : public scheduler_friend<any_of_awaitable<S, A...>, S> {
+    static_assert((Awaitable<A, S> && ...), "All variadic template parameters must be Awaitable");
+
+    using async_task_handle_type = typename S::async_task_handle_type;
+    using base_type = scheduler_friend<any_of_awaitable<S, A...>, S>;
+
+
+    any_of_awaitable(A&... awaitables) 
+        : base_type()
+        , handles_{}
+        , refs_{awaitables...}
+    {}
+    /*template <Handle<S> H>
+    bool await_suspend(H& h) { return base_type::schedule_active(h); }
+    void await_resume()  {}*/
+
+    // Awaitable interface
+    bool await_ready() {
+        return all_ready(std::index_sequence_for<A...>{});
+    }
+    bool await_suspend(async_task_handle_type& h) {
+        return suspend_all(h, std::index_sequence_for<A...>{});
+    }
+
+
+private:
+    template<size_t... Is>
+    bool all_ready(std::index_sequence<Is...>) {
+        return (std::get<Is>(refs_).await_ready() && ...);
+    }
+
+    template<size_t... Is>
+    bool suspend_all(async_task_handle_type& h, std::index_sequence<Is...>) {
+        bool any_suspended = false;
+        ((
+            [&]() { if (std::get<Is>(refs_).await_suspend(h)) any_suspended = true; }()
+        ), ...);
+        return any_suspended && base_type::suspend_active(h);
+    }
+
+private:
+    etl::flat_set<async_task_handle_type, sizeof...(A)> handles_;
+    std::tuple<A&...> refs_;  // Store references to awaitables
+};
 
 #if 0
 
@@ -545,9 +601,9 @@ struct event_awaitable : public scheduler_friend<event_awaitable<S>, S> {
 
     // Awaitable interface
     bool await_ready() { return !!handle_; }
-    template <typename H>
+    template <Handle<S> H>
     bool await_suspend(H& h) {
-        handle_ = h.promise().get_task_handle();
+        handle_ = h.promise().task_handle();
         return base_type::suspend_active(h);
     }
     void await_resume() {}
@@ -639,7 +695,5 @@ private:
 template <Clock C, typename S>
 event_awaitable<S> timer_service<C, S>::null_event{};
 
-
 }
-
 #endif

@@ -21,6 +21,7 @@ struct clock_tick {
 
     time_type now() { return now_; } 
 
+    // TODO: show in example how to handle counter overflows
     void advance() { 
         now_++; 
     }
@@ -41,7 +42,7 @@ using yield = cc::yield_awaitable<app_scheduler>;
 using event = cc::event_awaitable<app_scheduler>;
 using timer_service = cc::timer_service<clock_std_chrono, app_scheduler>;
 using async_task = app_scheduler::async_task_type;
-using coro = app_scheduler::coroutine_type;
+using async_func = app_scheduler::async_func_type;
 
 using namespace std::chrono_literals;
 using namespace std::chrono;
@@ -67,15 +68,16 @@ void f2() {
 
 int r = 0, s = 0;
 
-coro coro_sleep(timer_service &ts) {
+async_func sleepy_func(timer_service &ts) {
     co_await ts.sleep_for(2000ms);
 
     pr_debug("post sleep");
 }
 
-coro coro_coro(timer_service& ts) {
-    pr_debug("sub-task r " << r);
-    co_await coro_sleep(ts);
+async_func drowsy_func(timer_service& ts) {
+    auto sleep = sleepy_func(ts);
+    pr_debug("sub-task r:" << r << ", sizeof(sleep)= " << sizeof(sleep));
+    co_await sleep;
     pr_debug("post await");
     /*if (s++ < 1) co_await test();
     pr_debug("sub-task s " << r);1*/
@@ -92,7 +94,7 @@ async_task task1(int a, timer_service& ts, event& e, int (*f)())
         if (i == 5) co_return; // cc::exception("Who knows what happened");
         pr_debug(i);
         pr_debug("task 1: calling");
-        co_await coro_coro(ts);
+        co_await drowsy_func(ts);
         pr_debug("task 1: returned");
         f();
         co_await ts.sleep_for(500ms);
