@@ -1,7 +1,9 @@
-#ifndef COROCORE_DIRECT_TUPLE_H_
-#define COROCORE_DIRECT_TUPLE_H_
+#ifndef CORONIMO_DIRECT_TUPLE_H_
+#define CORONIMO_DIRECT_TUPLE_H_
 
 #include <etl/type_traits.h>
+
+namespace adva::coronimo {
 
 /**
  * @file direct_tuple.h
@@ -38,6 +40,11 @@ struct direct_tuple;
 template <>
 struct direct_tuple<> {};
 
+template <typename E>
+struct direct_tuple<E> {
+    E e; ///< Single or last element, stored with original value category
+};
+
 template <typename E, typename ...Rest>
 struct direct_tuple<E, Rest...> {
     E e;                          ///< First element, stored with original value category
@@ -63,4 +70,22 @@ auto& get(direct_tuple<E...>& t) {
     }
 }
 
-#endif // COROCORE_DIRECT_TUPLE_H_
+template <typename... Es, typename F>
+void tuple_for_each(direct_tuple<Es...>& dt, F&& f)
+{
+    if constexpr (sizeof...(Es) == 0) {
+        // Base case: no elements => do nothing
+    }
+    else if constexpr (sizeof...(Es) == 1) {
+        // Single-element direct_tuple => dt.e is the only field
+        f(dt.e);
+    }
+    else {
+        // Multi-element => dt.e plus dt.rest
+        f(dt.e);
+        tuple_for_each(dt.rest, std::forward<F>(f));
+    }
+}
+
+}
+#endif // CORONIMO_DIRECT_TUPLE_H_

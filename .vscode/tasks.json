@@ -13,11 +13,11 @@
 			"label": "CMake: build",
 			"command": "build",
 			"targets": [
-				"corocore_test"
+				"coronimo_test"
 			],
 			"group": "build",
 			"problemMatcher": [ "$gcc" ],
-			"detail": "build corocore_test with cmake"
+			"detail": "build coronimo_test with cmake"
 		},
 		{
 			"type": "cppbuild",
@@ -27,6 +27,7 @@
 				"-fdiagnostics-color=always",
 				"-fconcepts-diagnostics-depth=2",
 				"-g",
+				"-O0",
 				"${file}",
 				"--std",
 				"c++20",

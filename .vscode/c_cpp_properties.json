@@ -3,7 +3,7 @@
         {
             "name": "Linux",
             "includePath": [
-                "${workspaceFolder}/corocore/include/**",
+                "${workspaceFolder}/coronimo/include/**",
                 "${workspaceFolder}/etl/include/**"
             ],
             "defines": [],
